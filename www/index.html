@@ -1,0 +1,478 @@
+
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="msapplication-tap-highlight" content="no" />
+    <meta name="viewport" content="viewport-fit=cover, user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1, width=device-width" />
+    <meta http-equiv="Content-Security-Policy" content="default-src * gap: data: 'unsafe-eval' 'unsafe-inline' blob: ws: https://ssl.gstatic.com;img-src * data: gap: blob: 'self' content:;frame-src * gap: blob:;connect-src * gap: data: 'unsafe-eval' 'unsafe-inline' blob:;style-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob:;media-src *;script-src * data: 'self' 'unsafe-inline' 'unsafe-eval' gap: blob:;" />
+
+
+    <script type="text/javascript" src="cordova.js"></script>
+    <script src="js/jquery-1.10.2.js"></script>
+    <script src="js/mustache.min.js"></script>
+    <script src="js/waves.js"></script>
+    <!--note we're using an updated mapbox here-->
+    <script src='js/mapbox.3.2.0.js'></script>
+    <link href='css/mapbox.3.2.0.css' rel='stylesheet' />    
+
+    <script src='js/Leaflet.MiniMap.js'></script>
+    <link href='css/Leaflet.MiniMap.css' rel='stylesheet' />    
+
+    <link href='css/waves.css' rel='stylesheet' />    
+
+    <script>
+        var ROOT = "https://staging.leonetwork.org"
+        var kiosk = null;
+        var themap = null;
+
+        document.addEventListener('deviceready', function () {
+
+            Waves.attach("a.nav-button", ["waves-float"]);
+            Waves.init();
+
+            L.mapbox.accessToken = "pk.eyJ1IjoibGVvbmV0d29yayIsImEiOiIzZTcwOTc5YjA3ZGQwZWNlNjMyMjIwOWIxNmVhMTExNSJ9.0Bj60Y4gR_bkN3AobSIeaA";
+            themap = L.mapbox.map('mappanel', "mapbox.light", {zoomControl:false, attributionControl:false, doubleClickZoom:false, touchZoom:false, scrollZoom:false, dragging:false});
+            themap.setView([0, 0], 4);
+
+            var miniMap = new L.Control.MiniMap(L.mapbox.tileLayer('mapbox.light'), {position:"topright", zoomLevelFixed:1}).addTo(themap);
+
+            $.get(ROOT + "/en/kiosks/config/AKSUMMER2019", null, function (res) {
+                kiosk = res;
+
+                //fix up the colors and back-refs
+                for (var i = 0; i < kiosk.Lists.length; i++) {
+                    if (kiosk.Lists[i].ThumbnailImage == null) {
+                        if (kiosk.Lists[i].ImageIDs != null && kiosk.Lists[i].ImageIDs.length > 1)
+                            kiosk.Lists[i].ThumbnailImage = ROOT + "/attachments/thumbnail/" + kiosk.Lists[i].ImageIDs[1];
+                    }
+
+                    for (var j = 0; j < kiosk.Lists[i].Observations.length; j++) {
+                        kiosk.Lists[i].Observations[j].Color = kiosk.Lists[i].Color;
+                        kiosk.Lists[i].Observations[j].List = kiosk.Lists[i];
+                    }
+                }
+
+                render("nav-panel", "nav-template", kiosk);
+                showHome();
+            }, "json");
+        });
+
+        function showHome() {
+            $("#controlpanel").hide();
+            render("details-panel", "home-template", kiosk);
+
+            var allObs = [];
+            for (var i = 0; i < kiosk.Lists.length; i++) {
+                for (var j = 0; j < kiosk.Lists[i].Observations.length; j++) {
+                    allObs.push(kiosk.Lists[i].Observations[j]);
+                }
+            }
+
+            showOnMap(allObs);
+        }
+
+        function render(containerID, templateID, items) {
+            if (!Array.isArray(items))
+                items = [items];
+
+            var template = $("#" + templateID).html();
+            Mustache.parse(template);
+            var h = "";
+
+            for (var i = 0; i < items.length; i++) {
+                h += Mustache.render(template, items[i]);
+            }
+            $("#" + containerID).html(h).show();
+
+            //make all hyperlinks dead
+            $("#" + containerID).find("a").removeAttr("href");
+
+            //note that all navigation links use onclick
+
+            //add the click effect
+            Waves.attach("#" + containerID + " a.nav-button", ["waves-float"]);
+            Waves.init();
+        }
+
+        function getList(id) {
+            for (var i = 0; i < kiosk.Lists.length; i++) {
+                if (kiosk.Lists[i].ListID == id)
+                    return kiosk.Lists[i];
+            }
+            return null;
+        }
+
+        function getObservation(listid, obsid) {
+            var l = getList(listid);
+            if (l != null) {
+                for (var i = 0; i < l.Observations.length; i++) {
+                    if (l.Observations[i].ObservationID == obsid)
+                        return l.Observations[i];
+                }
+                return null;
+            }
+            else
+                return null;
+
+            
+        }
+
+        var markersOnMap = [];
+        var currentObservation = null;
+
+        function showObservation(listid, obsid) {
+            if (currentObservation != null && currentObservation.Marker != null) {
+                currentObservation.Marker.setStyle({ color: "white", weight:2 });
+            }
+
+            var o = getObservation(listid, obsid);
+            if (o != null) {
+                render("details-panel", "observation-details-template", o);
+                currentObservation = o;
+                if (o.LocationLat && o.LocationLat != null && o.LocationLng && o.LocationLng != null) {
+                    var ll = L.latLng(o.LocationLat, o.LocationLng);
+                    var currZoom = themap.getZoom();
+                    var zoomTo = o.DefaultZoomLevel || 9;
+                    zoomTo = (zoomTo > currZoom ? zoomTo : currZoom); //so that it only zooms in
+                    themap.flyTo(ll, zoomTo, { animate: true });
+                }
+
+                if (currentObservation.Marker != null) {
+                    currentObservation.Marker.setStyle({ color: "#ffeb3b", weight:10 });
+                }
+
+                $("#controlpanel").show();
+            }
+        }
+
+        function nextObservation() {
+            if (currentObservation != null) {
+                var list = currentObservation.List;
+                var idx = -1;
+                for (var i = 0; i < list.Observations.length; i++) {
+                    if (list.Observations[i].ObservationID == currentObservation.ObservationID) {
+                        idx = i;
+                        break;
+                    }
+                }
+
+                var showNextIdx = idx;
+                if (idx >= 0) {
+                    if (idx == list.Observations.length - 1)
+                        showNextIdx = 0;
+                    else
+                        showNextIdx = idx + 1;
+
+                    showObservation(list.ListID, list.Observations[showNextIdx].ObservationID);
+                }
+            }
+        }
+
+        function previousObservation() {
+            if (currentObservation != null) {
+                var list = currentObservation.List;
+                var idx = -1;
+                for (var i = 0; i < list.Observations.length; i++) {
+                    if (list.Observations[i].ObservationID == currentObservation.ObservationID) {
+                        idx = i;
+                        break;
+                    }
+                }
+
+                var showNextIdx = idx;
+                if (idx >= 0) {
+                    if (idx == 0)
+                        showNextIdx = list.Observations.length - 1;
+                    else
+                        showNextIdx = idx - 1;
+
+                    showObservation(list.ListID, list.Observations[showNextIdx].ObservationID);
+                }
+            }
+        }
+
+        function clearMap() {
+            for (var i = 0; i < markersOnMap.length; i++) {
+                themap.removeLayer(markersOnMap[i]);
+            }
+
+            markersOnMap = [];
+        }
+
+        function markerClicked(obs) {
+            //show the observation details panel
+            showObservation(obs.List.ListID, obs.ObservationID);
+        }
+
+        function showOnMap(observations, color) {
+            var lls = [];
+
+            clearMap();
+
+            for (var i = 0; i < observations.length; i++) {
+                var o = observations[i];
+                if (o.LocationLat && o.LocationLat != null && o.LocationLng && o.LocationLng != null) {
+                    var ll = L.latLng(o.LocationLat, o.LocationLng);
+                    lls.push(ll);
+                    var themarker = L.circleMarker(ll, {
+                        radius: 20,
+                        color: "white",
+                        weight: 2,
+                        opacity: 0.9,
+                        fillColor: color || o.Color || '#666',
+                        fillOpacity: 0.7
+                    });
+                    o.Marker = themarker; //back reference so that we can highlight the spot on the map
+                    themarker.Observation = o;
+                    themarker.on("click", function (e) {
+                        markerClicked(this.Observation);
+                    });
+                    markersOnMap.push(themarker);
+                }
+            }
+
+            if (lls.length > 0)
+                themap.flyToBounds(new L.LatLngBounds(lls), { animate: true });
+
+            //add markers to the map after it animates - looks better
+            for (var i = 0; i < markersOnMap.length; i++) {
+                markersOnMap[i].addTo(themap);
+            }
+        }
+
+        function showList(id) {
+            $("#controlpanel").hide();
+            var list = getList(id);
+            if (list != null) {
+                render("details-panel", "list-details-template", list);
+                showOnMap(list.Observations);
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            font-family:Arial, Helvetica, sans-serif;
+        }
+
+        #nav-panel {
+            background-color:#222;
+            position:absolute;
+            left:0px;
+            top:0px;
+            bottom:0px;
+            width:160px;
+            overflow:auto;
+            text-align:center;
+            box-shadow: 5px 0px 10px #111;
+        }
+
+        #nav-panel a.nav-button {
+            color:white;
+            font-size:16pt;
+            line-height:1em;
+            font-weight:bold;
+            margin-top:30px;
+            display:block;
+            min-height:100px;
+            vertical-align:middle;
+            text-align:center;
+        }
+
+        a.nav-button img {
+            width:100px;
+            border-radius:50px;
+            display:block;
+            margin:auto;
+        }
+
+        #details-panel {
+            background-color:#efefef;
+            position:absolute;
+            left:160px;
+            top:0px;
+            bottom:0px;
+            width:440px;
+            overflow:auto;
+            box-shadow: 5px 0px 10px #111;
+        }
+
+        #details-panel h1 {
+            font-size:40pt;
+            font-weight:bold;
+        }
+
+        #panel3 {
+            background-color:#efefef;
+            position:absolute;
+            left:600px;
+            top:0px;
+            bottom:0px;
+            right:0px;
+            overflow:auto;
+        }
+
+        #mappanel {
+            position:absolute;
+            left:600px;
+            top:0px;
+            bottom:0px;
+            right:0px;
+        }
+
+        #controlpanel {
+            position:absolute;
+            left:600px;
+            bottom:0px;
+            right:0px;
+            height:50px;
+            xbox-shadow: 0px 0px 10px #111;
+            display:none;
+            color:white;
+        }
+
+        .mapbox-logo {
+            display:none !important;
+        }
+    </style>
+
+    <script type="text/template" id="nav-template">
+        <a class="nav-button"  onclick="showHome();">
+                {{#ThumbnailImage}}
+                    <img src="{{ThumbnailImage}}" />
+                {{/ThumbnailImage}}
+                Home
+            </a>
+        <div id="lists-nav">
+            {{#Lists}}
+            <a class="nav-button" onclick="showList('{{ListID}}');">
+                {{#ThumbnailImage}}
+                    <img src="{{ThumbnailImage}}" />
+                {{/ThumbnailImage}}
+                {{ListName}}
+            </a>
+            {{/Lists}}
+        </div>
+        
+    </script>
+
+    <script type="text/template" id="list-details-template">
+        <div style="height:10px;background-color:{{Color}};">&nbsp;</div>
+        <div style="overflow:hidden;white-space:nowrap;height:100px;">
+            {{#ImageIDs}}
+              <img src="https://staging.leonetwork.org/attachments/thumbnail/{{.}}" style="width:100px;height:100px;" />
+            {{/ImageIDs}}
+        </div>
+        <div style="margin:20px;">
+            <h1>{{{ListNameHtml}}}</h1>
+            <div>{{{ListDescriptionHtml}}}</div>
+
+            <hr />
+
+            {{#Observations}}
+                <a style="display:block;margin-bottom:20px;box-shadow:none;" class="nav-button" onclick="showObservation('{{ListID}}', '{{ObservationID}}');">
+                    <h2 style="margin-bottom:0px;">{{{ObservationTitleHtml}}}</h2>
+                    <div style="color:gray;">{{LocationDescription}}</div>
+                </a>
+            {{/Observations}}
+        </div>
+
+        
+    </script>
+
+    <script type="text/template" id="observation-details-template">
+        <div style="height:10px;background-color:{{Color}};">&nbsp;</div>
+
+        <div style="margin:20px;">
+            <div>{{LocationDescription}}</div>
+            <h1 style="margin:0px;">{{{ObservationTitleHtml}}}</h1>
+            {{#SourceName}}
+            <div>
+                {{#GoogleFaviconUrl}}
+                <img src="{{GoogleFaviconUrl}}" style="width:16px;"/>
+                {{/GoogleFaviconUrl}}
+                <span>{{SourceName}}</span>
+            </div>
+            {{/SourceName}}
+
+            {{^SourceName}}
+            <div>
+                <img src="img/logo.png" style="width:16px;"/>
+                <span>LEO Network</span>
+            </div>
+            {{/SourceName}}
+
+            <h4>{{{ObservationSummaryHtml}}}</h4>
+
+            <div>
+                {{#Images}}
+                <div style="margin-bottom:20px;">
+                    <img src="{{WebSizeUrl}}" style="max-width:100%;" />
+                    <div><strong>{{{CaptionHtml}}}</strong></div>
+                    <div><i>{{{CreditHtml}}}</i></div>
+                </div>
+                {{/Images}}
+            </div>
+        </div>
+    </script>
+
+
+    <script type="text/template" id="home-template">
+        <div style="margin:20px;">
+            <h1 style="margin:0px;">{{{KioskNameHtml}}}</h1>
+            <hr />
+            <div>{{{KioskDescriptionHtml}}}</div>
+
+            <div>
+                {{#Lists}}
+                <a class="nav-button" onclick="showList('{{ListID}}');" style="display:block;margin-bottom:20px;box-shadow:none;">
+                    <h2 style="vertical-align:middle;padding:0px;margin:0px;"><span style="background-color:{{Color}};border:2px solid white;width:20px;height:20px;border-radius:50%;display:inline-block;"></span> {{{ListNameHtml}}}</h2>
+                </a>
+                {{/Lists}}
+            </div>
+        </div>
+    </script>
+</head>
+
+<body>
+    <div class="container-fluid">
+
+        <!--these are in right to left order so that drop shadows overlap properly-->
+
+        <div id="mappanel"></div>
+
+        <div id="controlpanel">
+            <table style="width:100%;">
+                <tr>
+                    <td style="width:50%;">
+                        <a style="display:block;background-color:#03a9f4;" class="nav-button" onclick="previousObservation();">
+                            <h3 style="text-align:center;">
+                                &lsaquo; Previous 
+                            </h3>
+                        </a>
+                    </td>
+                    <td style="width:50%;">
+                        <a style="display:block;background-color:#4caf50;" class="nav-button" onclick="nextObservation();">
+                            <h3 style="text-align:center;">
+                                Next &rsaquo;
+                            </h3>
+                        </a>
+                    </td>
+                </tr>
+            </table>
+            
+            
+        </div>
+
+        <div id="details-panel"></div>
+
+        <div id="nav-panel">
+            
+        </div>
+    </div>
+</body>
+</html>
